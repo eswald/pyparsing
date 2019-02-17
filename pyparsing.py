@@ -109,6 +109,7 @@ import pprint
 import traceback
 import types
 from datetime import datetime
+from functools import partial
 
 try:
     # Python 3
@@ -1610,6 +1611,20 @@ class ParserElement(object):
         else:
             return True
 
+    class dualmethod(object):
+        r"""Convert a function to a dual class/instance method.
+            Such a method receives either a class or an instance as an implicit first argument,
+            allowing it to use class methods and class attributes that can be overridden per instance.
+        """
+        
+        def __init__(self, method):
+            self.method = method
+        
+        def __get__(self, obj, cls):
+            if obj is None:
+                obj = cls
+            return partial(self.method, obj)
+
     class _UnboundedCache(object):
         def __init__(self):
             cache = {}
@@ -1692,7 +1707,6 @@ class ParserElement(object):
 
     # argument cache for optimizing repeated calls when backtracking through recursive expressions
     packrat_cache = {} # this is set later by enabledPackrat(); this is here so that resetCache() doesn't fail
-    packrat_cache_lock = RLock()
     packrat_cache_stats = [0, 0]
 
     # this method gets repeatedly called during backtracking with the same arguments -
@@ -1700,11 +1714,11 @@ class ParserElement(object):
     def _parseCache( self, instring, loc, doActions=True, callPreParse=True ):
         HIT, MISS = 0, 1
         lookup = (self, instring, loc, callPreParse, doActions)
-        with ParserElement.packrat_cache_lock:
-            cache = ParserElement.packrat_cache
+        with self.packrat_cache_lock:
+            cache = self.packrat_cache
             value = cache.get(lookup)
             if value is cache.not_in_cache:
-                ParserElement.packrat_cache_stats[MISS] += 1
+                self.packrat_cache_stats[MISS] += 1
                 try:
                     value = self._parseNoCache(instring, loc, doActions, callPreParse)
                 except ParseBaseException as pe:
@@ -1715,21 +1729,21 @@ class ParserElement(object):
                     cache.set(lookup, (value[0], value[1].copy()))
                     return value
             else:
-                ParserElement.packrat_cache_stats[HIT] += 1
+                self.packrat_cache_stats[HIT] += 1
                 if isinstance(value, Exception):
                     raise value
                 return (value[0], value[1].copy())
 
     _parse = _parseNoCache
 
-    @staticmethod
-    def resetCache():
-        ParserElement.packrat_cache.clear()
-        ParserElement.packrat_cache_stats[:] = [0] * len(ParserElement.packrat_cache_stats)
+    @dualmethod
+    def resetCache(self):
+        self.packrat_cache.clear()
+        self.packrat_cache_stats[:] = [0] * len(self.packrat_cache_stats)
 
     _packratEnabled = False
-    @staticmethod
-    def enablePackrat(cache_size_limit=128):
+    @dualmethod
+    def enablePackrat(self, cache_size_limit=128):
         """Enables "packrat" parsing, which adds memoizing to the parsing logic.
            Repeated parse attempts at the same string location (which happens
            often in many complex grammars) can immediately return a cached value,
@@ -1755,13 +1769,15 @@ class ParserElement(object):
                import pyparsing
                pyparsing.ParserElement.enablePackrat()
         """
-        if not ParserElement._packratEnabled:
-            ParserElement._packratEnabled = True
-            if cache_size_limit is None:
-                ParserElement.packrat_cache = ParserElement._UnboundedCache()
-            else:
-                ParserElement.packrat_cache = ParserElement._FifoCache(cache_size_limit)
-            ParserElement._parse = ParserElement._parseCache
+        self._packratEnabled = True
+        self.packrat_cache_lock = RLock()
+        self.packrat_cache_stats = [0, 0]
+        if cache_size_limit is None:
+            self.packrat_cache = ParserElement._UnboundedCache()
+        else:
+            self.packrat_cache = ParserElement._FifoCache(cache_size_limit)
+        self._parse = self._parseCache
+        return self
 
     def parseString( self, instring, parseAll=False ):
         """

@@ -2308,6 +2308,45 @@ class PackratParsingCacheCopyTest2(ParseTestCase):
         print_(result.asList())
         self.assertEqual(len(result[1]), 1, "packrat parsing is duplicating And term exprs")
 
+class LocalPackratTest(ParseTestCase):
+    def runTest(self):
+        from pyparsing import ParserElement, Word, alphas, oneOf
+
+        ParserElement.resetCache()
+        
+        name = Word(alphas).enablePackrat()
+        operator = oneOf("+ - * /")
+        expression = (name + "()") | (name + operator + name)
+        
+        # The expression should parse correctly.
+        result = expression.parseString("A + B")
+        print_(result.asList())
+        self.assertEqual(list(result), ["A", "+", "B"])
+        
+        # The `name` expression should have used its own packrat cache.
+        self.assertEqual(name.packrat_cache_stats, [1, 2])
+        if ParserElement._packratEnabled:
+            self.assertEqual(ParserElement.packrat_cache_stats, [0, 5])
+        else:
+            self.assertEqual(ParserElement.packrat_cache_stats, [0, 0])
+        
+        # Re-using an expression should return the new values.
+        result = expression.parseString("C + B")
+        print_(result.asList())
+        self.assertEqual(list(result), ["C", "+", "B"])
+        self.assertEqual(name.packrat_cache_stats, [2, 4])
+        
+        # The cache should be used if the same string comes through again.
+        result = expression.parseString("A + B")
+        self.assertEqual(list(result), ["A", "+", "B"])
+        self.assertEqual(name.packrat_cache_stats, [5, 4])
+        
+        # The element's cache can be reset individually.
+        name.resetCache()
+        result = expression.parseString("A + B")
+        self.assertEqual(list(result), ["A", "+", "B"])
+        self.assertEqual(name.packrat_cache_stats, [1, 2])
+
 class ParseResultsDelTest(ParseTestCase):
     def runTest(self):
         from pyparsing import OneOrMore, Word, alphas, nums
